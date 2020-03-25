@@ -30,6 +30,7 @@ module.exports = class Queue {
     
   }
 
+
   // add(job) {
   //   const innerJob = new Job(job);
   //   if (innerJob.checkJobParams())
