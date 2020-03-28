@@ -13,21 +13,29 @@ const exec = util.promisify(require('child_process').exec);
 const redis = require('redis');
 const { globalListener } = require('./globalListener');
 const Job = require('./job');
-const uuid = require('uuid');
+const { v4 : uuidv4 } = require('uuid');
 const { createRedisUri } = require('./utils');
 
 module.exports = class Queue {
-  constructor(name, queueServer = null) {
+  constructor(queueServer = null) {
     this.isExecuting = false;
 
     this.jobCount = 0;
 
-    this.name = name;
+    this.name = uuidv4();
     this.client = null;
     this.queueServer = queueServer
       ? createRedisUri(queueServer)
       : process.env.REDIS_SERVER;
     
+  }
+
+  obtainTask(job) {
+    const returnRes = {
+      'string': { task: job, priority: 1 },
+      'object': { task: job.task, priority: job.priority }
+    };
+    return returnRes[job.length ? 'string' : 'object'];
   }
 
 
@@ -37,19 +45,24 @@ module.exports = class Queue {
   //     // this.queue.push(innerJob);
   // }
 
+  /*
+    Job : { taks: string, priority: number }
+  */
+
   // Adding job to queue that immediatelly invokes
   async simpleAdd(job) {
     if (!this.client)
       return;
     
+    const { task, priority } = this.obtainTask(job);
 
     if (this.isExecuting) {
-      this.client.rpush(this.name, job);
+      this.client.zadd(this.name, priority, task);
       return;
     }
     
     this.isExecuting = true;
-    const { stdout, stderr } = await exec(job);
+    const { stdout, stderr } = await exec(task);
     this.isExecuting = false;
     globalListener.emit('process_event', {
       job,
@@ -64,6 +77,7 @@ module.exports = class Queue {
   }
 
   process(callback) {
+    if (this.client) return;
     // if (this.hasOwnProperty('queue')) return;
 
     // Object.defineProperty(this, 'queue', {
@@ -74,13 +88,6 @@ module.exports = class Queue {
 
     return new Promise((res, rej) => {
       this.client = redis.createClient(process.env.REDIS_SERVER);
-
-      function done(jobName, action = '') {
-        if (typeof action === 'function')
-          action()
-        else console.log(action.length ? action : `Job ${jobName} is done.`);
-      }
-
       // Callback must have job and done func
 
       this.client.on("error", (error) => {
@@ -89,15 +96,24 @@ module.exports = class Queue {
       });
 
       globalListener.on('process_event', ({job, output, error, index}) => {
-        if (this.client.llen(this.name)) {
-          this.client.lpop(this.name, (err, reply) => {
-            if (err)
-              this.handleError('Lpop', 'Cannot obtain element from list');
-            return reply && this.simpleAdd(reply);
-          });
-        }
         callback(job, () => {
-          console.log(`Job is №${index} done`);  
+          console.log(`Job №${index} is done with output: ${output}`);  
+        });
+        this.client.zrange(this.name, 0, -1, (err, result) => {
+          if (err) 
+            return this.handleError('ZRANGE', 'Error occured when obtaining set');
+          if (!result.length) return;
+          // this.client.zpopmax(this.name, (err, reply) => {
+            // console.log(err, reply)
+            // if (err)
+              // return this.handleError('ZPOPMAX', 'Cannot obtain element from set');
+          const curJob = result[0];
+          this.client.zremrangebyrank(this.name, 0, 0);
+          this.simpleAdd(curJob);
+          // });
+          // callback(job, () => {
+          //   console.log(`Job №${index} is done`);  
+          // });
         });
       });
     });

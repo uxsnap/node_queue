@@ -1,18 +1,18 @@
 require('systemd');
 require('autoquit');
 
-const { v4: uuidv4 } = require('uuid');
-
 const Queue = require('./src/queue.js');
 
-const q = new Queue(uuidv4());
+const q = new Queue();
 
 q.process(function(job, done) {
   done(job);
 });
 
 q.simpleAdd('node test.js');
-q.simpleAdd('node test.js');
+q.simpleAdd({ task: 'node test2.js 2', priority: 2 });
+q.simpleAdd({ task: 'node test2.js 3', priority: 3 });
+q.simpleAdd({ task: 'node test2.js 4', priority: 2 });
 
 
 // module.exports.Queue = Queue;
