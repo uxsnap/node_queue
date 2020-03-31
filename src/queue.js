@@ -11,7 +11,7 @@
 const util = require('util');
 const exec = util.promisify(require('child_process').exec);
 const redis = require('redis');
-const { globalListener } = require('./globalListener');
+const EventEmitter = require('events');
 const Job = require('./job');
 const { v4 : uuidv4 } = require('uuid');
 const { createRedisUri } = require('./utils');
@@ -21,6 +21,8 @@ module.exports = class Queue {
     this.isExecuting = false;
 
     this.jobCount = 0;
+
+    this.emitter = new EventEmitter();
 
     this.name = uuidv4();
     this.client = null;
@@ -32,8 +34,12 @@ module.exports = class Queue {
 
   obtainTask(job) {
     const returnRes = {
-      'string': { task: job, priority: 1 },
-      'object': { task: job.task, priority: job.priority }
+      'string': { task: job, priority: 1, delay: 0 },
+      'object': {
+        task: job.task,
+        priority: job.priority,
+        delay: job.delay
+      }
     };
     return returnRes[job.length ? 'string' : 'object'];
   }
@@ -46,30 +52,32 @@ module.exports = class Queue {
   // }
 
   /*
-    Job : { taks: string, priority: number }
+    Job : { taks: string, priority: number, delay: time ( only in seconds by now ) }
   */
 
   // Adding job to queue that immediatelly invokes
-  async simpleAdd(job) {
+  simpleAdd(job) {
     if (!this.client)
       return;
     
-    const { task, priority } = this.obtainTask(job);
+    const { task, priority, delay } = this.obtainTask(job);
 
     if (this.isExecuting) {
-      this.client.zadd(this.name, priority, task);
+      this.client.zadd(this.name, priority, `${task}&${delay}`);
       return;
     }
     
     this.isExecuting = true;
-    const { stdout, stderr } = await exec(task);
-    this.isExecuting = false;
-    globalListener.emit('process_event', {
-      job,
-      output: stdout,
-      error: stderr,
-      index: ++this.jobCount
-    });
+    setTimeout(async () => {
+      const { stdout, stderr } = await exec(task);
+      this.isExecuting = false;
+      this.emitter.emit('process_event', {
+        job,
+        output: stdout,
+        error: stderr,
+        index: ++this.jobCount
+      });
+    }, delay);
   }
 
   handleError(type, message) {
@@ -95,25 +103,25 @@ module.exports = class Queue {
         rej(error);
       });
 
-      globalListener.on('process_event', ({job, output, error, index}) => {
+      this.emitter.on('process_event', ({
+        job,
+        output,
+        error,
+        index
+      }) => {
         callback(job, () => {
-          console.log(`Job №${index} is done with output: ${output}`);  
+          console.log(`${this.name}: Job №${index} is done with output: ${output}`);  
         });
         this.client.zrange(this.name, 0, -1, (err, result) => {
-          if (err) 
-            return this.handleError('ZRANGE', 'Error occured when obtaining set');
-          if (!result.length) return;
-          // this.client.zpopmax(this.name, (err, reply) => {
-            // console.log(err, reply)
-            // if (err)
-              // return this.handleError('ZPOPMAX', 'Cannot obtain element from set');
-          const curJob = result[0];
+          if (!result.length) {
+            this.client.end(true);
+            return;
+          }
+          if (err)
+            return this.handleError('ZRANGE', 'Cannot obtain element from set');
+          const [job, delay] = result[0].split('&');
           this.client.zremrangebyrank(this.name, 0, 0);
-          this.simpleAdd(curJob);
-          // });
-          // callback(job, () => {
-          //   console.log(`Job №${index} is done`);  
-          // });
+          this.simpleAdd({task: job, priority: 1, delay});
         });
       });
     });
