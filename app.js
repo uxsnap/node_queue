@@ -5,21 +5,32 @@ const Queue = require('./src/queue.js');
 
 const q = new Queue();
 
-const q2 = new Queue();
+// const q2 = new Queue();
 
 q.process((job, done) => {
   done(job);
 });
 
-q2.process((job, done) => {
-  done(job);
-})
+// q2.process((job, done) => {
+//   done(job);
+// });
 
-q.simpleAdd('node test.js');
-q.simpleAdd({ task: 'node test2.js q-1', priority: 4, delay: 1000 });
-q2.simpleAdd({ task: 'node test2.js q2-1', priority: 1 });
+q.on('completed', () => {
+  console.log('YESSSSSS!');
+});
+
+q.on('error', () => {
+  console.log('meeeh');
+});
+
+
+// q.simpleAdd('node test.js');
+q.simpleAdd({ task: 'node test2.js q-1', priority: 4 });
+// q2.simpleAdd({ task: 'node test2.js q2-1', priority: 1 });
+q.pause()
 q.simpleAdd({ task: 'node test2.js q-2', priority: 2 });
-q2.simpleAdd({ task: 'node test2.js q2-2', priority: 3, delay: 3000})
+q.resume();
+// q2.simpleAdd({ task: 'node test2.js q2-2', priority: 3, delay: 3000})
 
 // module.exports.Queue = Queue;
 
